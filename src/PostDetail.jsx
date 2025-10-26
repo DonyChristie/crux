@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { doc, getDoc, collection, onSnapshot, setDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'
+import { doc, getDoc, collection, onSnapshot, setDoc, serverTimestamp, deleteDoc, addDoc, query, orderBy } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, logout } from './firebase'
 import './App.css'
@@ -16,6 +16,8 @@ function PostDetail() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
+  const [comments, setComments] = useState([])
+  const [commentText, setCommentText] = useState('')
 
   // Auth state listener
   useEffect(() => {
@@ -89,6 +91,28 @@ function PostDetail() {
     }
   }, [postId, user, navigate])
 
+  // Fetch comments
+  useEffect(() => {
+    console.log('Setting up comments listener for post:', postId)
+    const commentsRef = collection(db, 'posts', postId, 'comments')
+    const q = query(commentsRef, orderBy('createdAt', 'asc'))
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      console.log('Comments snapshot:', snapshot.docs.length, 'comments')
+      const commentsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        time: doc.data().createdAt?.toDate() || new Date()
+      }))
+      console.log('Comments data:', commentsData)
+      setComments(commentsData)
+    }, (error) => {
+      console.error('Error fetching comments:', error)
+    })
+
+    return () => unsubscribe()
+  }, [postId])
+
   const handleRating = async (rating) => {
     if (!user) {
       openAuthModal()
@@ -116,6 +140,34 @@ function PostDetail() {
       console.error('Error deleting post:', error)
     }
   }
+
+  const handleAddComment = async (e) => {
+    e.preventDefault()
+    if (!commentText.trim() || commentText.length > 2048 || !user) return
+
+    try {
+      await addDoc(collection(db, 'posts', postId, 'comments'), {
+        content: commentText.trim(),
+        authorId: user.uid,
+        author: user.displayName || user.email?.split('@')[0] || 'Anonymous',
+        createdAt: serverTimestamp()
+      })
+      setCommentText('')
+    } catch (error) {
+      console.error('Error adding comment:', error)
+    }
+  }
+
+  const handleDeleteComment = async (commentId) => {
+    if (!window.confirm('Delete this comment?')) return
+
+    try {
+      await deleteDoc(doc(db, 'posts', postId, 'comments', commentId))
+    } catch (error) {
+      console.error('Error deleting comment:', error)
+    }
+  }
+
 
   const handleGoogleSignIn = async () => {
     try {
@@ -266,6 +318,65 @@ function PostDetail() {
                 <div className="rating-legend">
                   <span className="legend-item">0 = No relevance</span>
                   <span className="legend-item">11 = Guaranteed best future</span>
+                </div>
+              </div>
+
+              {/* Comments Section */}
+              <div className="comments-section">
+                <div className="comments-header">
+                  <span className="comments-label">
+                    {comments.length} {comments.length === 1 ? 'COMMENT' : 'COMMENTS'}
+                  </span>
+                </div>
+
+                {user && (
+                  <form onSubmit={handleAddComment} className="comment-form">
+                    <textarea
+                      value={commentText}
+                      onChange={(e) => setCommentText(e.target.value)}
+                      placeholder="ADD A COMMENT..."
+                      rows="3"
+                      maxLength={2048}
+                      className="comment-input"
+                    />
+                    <div className="comment-footer">
+                      <span className={2048 - commentText.length < 0 ? 'count-over' : 'count'}>
+                        {2048 - commentText.length}
+                      </span>
+                      <button type="submit" disabled={!commentText.trim() || commentText.length > 2048}>
+                        ADD COMMENT
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {!user && (
+                  <div className="comment-auth-notice">
+                    Sign in to add comments
+                  </div>
+                )}
+
+                <div className="comments-list">
+                  {comments.map(comment => (
+                    <div key={comment.id} className="comment">
+                      <div className="comment-header">
+                        <div>
+                          <span className="comment-author">{comment.author}</span>
+                          <span className="comment-time">· {timeAgo(comment.time)}</span>
+                        </div>
+                        {user && user.uid === comment.authorId && (
+                          <button
+                            onClick={() => handleDeleteComment(comment.id)}
+                            className="delete-comment-btn"
+                            title="Delete comment"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                      <p className="comment-text">{comment.content}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
