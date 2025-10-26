@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore'
+import { useNavigate } from 'react-router-dom'
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, getDoc, getDocs, deleteDoc } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, logout } from './firebase'
 import './App.css'
@@ -33,8 +34,11 @@ const examplePosts = [
 }))
 
 function App() {
+  const navigate = useNavigate()
   const [posts, setPosts] = useState([])
+  const [title, setTitle] = useState('')
   const [text, setText] = useState('')
+  const [tags, setTags] = useState('')
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showAuthModal, setShowAuthModal] = useState(false)
@@ -55,37 +59,86 @@ function App() {
   // Firestore listener for posts
   useEffect(() => {
     const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'))
+    const unsubscribes = []
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const postsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        time: doc.data().createdAt?.toDate() || new Date()
+    const postsUnsubscribe = onSnapshot(q, (snapshot) => {
+      const postsData = snapshot.docs.map(postDoc => ({
+        id: postDoc.id,
+        ...postDoc.data(),
+        time: postDoc.data().createdAt?.toDate() || new Date(),
+        avgRating: null,
+        ratingCount: 0,
+        userRating: null
       }))
+
       setPosts(postsData)
+
+      // Set up rating listeners for each post
+      postsData.forEach(post => {
+        const ratingsRef = collection(db, 'posts', post.id, 'ratings')
+        const ratingsUnsubscribe = onSnapshot(ratingsRef, (ratingsSnapshot) => {
+          const ratings = ratingsSnapshot.docs.map(doc => doc.data().rating)
+          const avgRating = ratings.length > 0
+            ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
+            : null
+
+          const userRating = user && ratingsSnapshot.docs.find(d => d.id === user.uid)
+            ? ratingsSnapshot.docs.find(d => d.id === user.uid).data().rating
+            : null
+
+          setPosts(prevPosts => prevPosts.map(p =>
+            p.id === post.id
+              ? { ...p, avgRating, ratingCount: ratings.length, userRating }
+              : p
+          ))
+        })
+        unsubscribes.push(ratingsUnsubscribe)
+      })
     }, (error) => {
       console.error('Error fetching posts:', error)
-      // Fall back to example posts if there's an error
       setPosts(examplePosts)
     })
 
-    return () => unsubscribe()
-  }, [])
+    return () => {
+      postsUnsubscribe()
+      unsubscribes.forEach(unsub => unsub())
+    }
+  }, [user])
 
   const handlePost = async (e) => {
     e.preventDefault()
-    if (!text.trim() || text.length > 280 || !user) return
+    if (!text.trim() || text.length > 2048 || title.length > 144 || !user) return
 
     try {
+      // Parse tags: comma-separated, trim whitespace, filter empty
+      const tagArray = tags
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(tag => tag.length > 0)
+
       await addDoc(collection(db, 'posts'), {
+        title: title.trim(),
         content: text.trim(),
+        tags: tagArray,
         authorId: user.uid,
         author: user.displayName || user.email?.split('@')[0] || 'Anonymous',
         createdAt: serverTimestamp()
       })
+      setTitle('')
       setText('')
+      setTags('')
     } catch (error) {
       console.error('Error posting:', error)
+    }
+  }
+
+  const handleDeletePost = async (postId) => {
+    if (!window.confirm('Are you sure you want to delete this crux?')) return
+
+    try {
+      await deleteDoc(doc(db, 'posts', postId))
+    } catch (error) {
+      console.error('Error deleting post:', error)
     }
   }
 
@@ -133,6 +186,23 @@ function App() {
     }
   }
 
+  const handleRating = async (postId, rating) => {
+    if (!user) {
+      openAuthModal()
+      return
+    }
+
+    try {
+      await setDoc(doc(db, 'posts', postId, 'ratings', user.uid), {
+        rating,
+        userId: user.uid,
+        createdAt: serverTimestamp()
+      })
+    } catch (error) {
+      console.error('Error rating post:', error)
+    }
+  }
+
   const timeAgo = (date) => {
     const seconds = Math.floor((new Date() - date) / 1000)
     if (seconds < 60) return `${seconds}s`
@@ -141,7 +211,8 @@ function App() {
     return `${Math.floor(seconds / 86400)}d`
   }
 
-  const remaining = 280 - text.length
+  const remainingTitle = 144 - title.length
+  const remainingContent = 2048 - text.length
 
   // Scroll fade effect
   useEffect(() => {
@@ -208,15 +279,33 @@ function App() {
         <div className="compose">
           <div className="avatar">A</div>
           <form onSubmit={handlePost} className="compose-form">
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="TITLE (OPTIONAL)"
+              maxLength={144}
+              className="title-input"
+            />
+            <div className="title-count">
+              <span className={remainingTitle < 0 ? 'count-over' : 'count'}>{remainingTitle}</span>
+            </div>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="TRANSMIT YOUR MISSION-CRITICAL INSIGHT..."
-              rows="3"
+              rows="5"
+            />
+            <input
+              type="text"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="TAGS (COMMA-SEPARATED, E.G. AI SAFETY, LONGTERMISM, EXISTENTIAL RISK)"
+              className="tags-input"
             />
             <div className="compose-footer">
-              <span className={remaining < 0 ? 'count-over' : 'count'}>{remaining}</span>
-              <button type="submit" disabled={!text.trim() || remaining < 0 || !user}>
+              <span className={remainingContent < 0 ? 'count-over' : 'count'}>{remainingContent}</span>
+              <button type="submit" disabled={!text.trim() || remainingContent < 0 || remainingTitle < 0 || !user}>
                 {user ? 'POST' : 'SIGN IN TO POST'}
               </button>
             </div>
@@ -228,14 +317,64 @@ function App() {
 
         <div className="feed">
           {posts.map(post => (
-            <div key={post.id} className="post">
+            <div key={post.id} className="post" onClick={() => navigate(`/post/${post.id}`)} style={{ cursor: 'pointer' }}>
               <div className="avatar">A</div>
               <div className="post-content">
                 <div className="post-header">
                   <span className="author">{post.author || 'Anonymous'}</span>
                   <span className="time">· {timeAgo(post.time)}</span>
+                  {user && user.uid === post.authorId && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeletePost(post.id)
+                      }}
+                      className="delete-btn"
+                      title="Delete this crux"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
+                {post.title && <h2 className="post-title">{post.title}</h2>}
+                {post.tags && post.tags.length > 0 && (
+                  <div className="tags">
+                    {post.tags.map((tag, i) => (
+                      <span key={i} className="tag">{tag}</span>
+                    ))}
+                  </div>
+                )}
                 <p className="post-text">{post.content}</p>
+
+                <div className="rating-section" onClick={(e) => e.stopPropagation()}>
+                  <div className="rating-header">
+                    <span className="rating-label">CRUX RATING</span>
+                    {post.avgRating !== null && (
+                      <span className="avg-rating">
+                        {post.avgRating.toFixed(1)}/11 ({post.ratingCount} {post.ratingCount === 1 ? 'rating' : 'ratings'})
+                      </span>
+                    )}
+                  </div>
+                  <div className="rating-scale">
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(value => (
+                      <button
+                        key={value}
+                        className={`rating-btn ${post.userRating === value ? 'selected' : ''} ${value === 0 ? 'zero' : value === 11 ? 'eleven' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRating(post.id, value)
+                        }}
+                        title={value === 0 ? 'No relevance (100% certain)' : value === 11 ? 'Guaranteed best future (100% certain)' : `${value}/11`}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="rating-legend">
+                    <span className="legend-item">0 = No relevance</span>
+                    <span className="legend-item">11 = Guaranteed best future</span>
+                  </div>
+                </div>
               </div>
             </div>
           ))}
