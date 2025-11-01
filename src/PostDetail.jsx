@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { doc, getDoc, collection, onSnapshot, setDoc, serverTimestamp, deleteDoc, addDoc, query, orderBy } from 'firebase/firestore'
+import { doc, getDoc, collection, onSnapshot, setDoc, updateDoc, serverTimestamp, deleteDoc, addDoc, query, orderBy } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, logout } from './firebase'
+import ThreadedComment from './ThreadedComment'
 import './App.css'
 
 function PostDetail() {
@@ -18,6 +19,18 @@ function PostDetail() {
   const [authError, setAuthError] = useState('')
   const [comments, setComments] = useState([])
   const [commentText, setCommentText] = useState('')
+  const [isEditingPost, setIsEditingPost] = useState(false)
+  const [editPostTitle, setEditPostTitle] = useState('')
+  const [editPostContent, setEditPostContent] = useState('')
+  const [editPostTags, setEditPostTags] = useState('')
+  const [editingCommentId, setEditingCommentId] = useState(null)
+  const [editCommentText, setEditCommentText] = useState('')
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('crux-theme') || 'clean'
+  })
+  const [replyingToId, setReplyingToId] = useState(null)
+  const [replyText, setReplyText] = useState('')
+  const [commentSortBy, setCommentSortBy] = useState('rating') // 'rating' or 'recency'
 
   // Auth state listener
   useEffect(() => {
@@ -26,6 +39,17 @@ function PostDetail() {
     })
     return () => unsubscribe()
   }, [])
+
+  // Apply theme
+  useEffect(() => {
+    document.body.className = theme === 'starry' ? 'theme-starry' : 'theme-clean'
+  }, [theme])
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'clean' ? 'starry' : 'clean'
+    setTheme(newTheme)
+    localStorage.setItem('crux-theme', newTheme)
+  }
 
   // Fetch post and ratings
   useEffect(() => {
@@ -91,27 +115,58 @@ function PostDetail() {
     }
   }, [postId, user, navigate])
 
-  // Fetch comments
+  // Fetch comments with ratings
   useEffect(() => {
     console.log('Setting up comments listener for post:', postId)
     const commentsRef = collection(db, 'posts', postId, 'comments')
     const q = query(commentsRef, orderBy('createdAt', 'asc'))
+    const unsubscribes = []
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const commentsUnsubscribe = onSnapshot(q, (snapshot) => {
       console.log('Comments snapshot:', snapshot.docs.length, 'comments')
       const commentsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
-        time: doc.data().createdAt?.toDate() || new Date()
+        time: doc.data().createdAt?.toDate() || new Date(),
+        avgRating: null,
+        ratingCount: 0,
+        userRating: null,
+        replyCount: 0
       }))
-      console.log('Comments data:', commentsData)
+
       setComments(commentsData)
+
+      // Set up rating listeners for each comment
+      commentsData.forEach(comment => {
+        const ratingsRef = collection(db, 'posts', postId, 'comments', comment.id, 'ratings')
+        const ratingsUnsubscribe = onSnapshot(ratingsRef, (ratingsSnapshot) => {
+          const ratings = ratingsSnapshot.docs.map(doc => doc.data().rating)
+          const avgRating = ratings.length > 0
+            ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
+            : null
+
+          const userRating = user && ratingsSnapshot.docs.find(d => d.id === user.uid)
+            ? ratingsSnapshot.docs.find(d => d.id === user.uid).data().rating
+            : null
+
+          setComments(prevComments => prevComments.map(c =>
+            c.id === comment.id
+              ? { ...c, avgRating, ratingCount: ratings.length, userRating }
+              : c
+          ))
+        })
+        unsubscribes.push(ratingsUnsubscribe)
+      })
+
     }, (error) => {
       console.error('Error fetching comments:', error)
     })
 
-    return () => unsubscribe()
-  }, [postId])
+    return () => {
+      commentsUnsubscribe()
+      unsubscribes.forEach(unsub => unsub())
+    }
+  }, [postId, user])
 
   const handleRating = async (rating) => {
     if (!user) {
@@ -150,6 +205,7 @@ function PostDetail() {
         content: commentText.trim(),
         authorId: user.uid,
         author: user.displayName || user.email?.split('@')[0] || 'Anonymous',
+        parentId: null, // Top-level comment
         createdAt: serverTimestamp()
       })
       setCommentText('')
@@ -158,16 +214,136 @@ function PostDetail() {
     }
   }
 
+  const handleSubmitReply = async (parentId) => {
+    if (!user) {
+      openAuthModal()
+      return
+    }
+
+    if (!replyText.trim() || replyText.length > 2048) return
+
+    try {
+      await addDoc(collection(db, 'posts', postId, 'comments'), {
+        content: replyText.trim(),
+        authorId: user.uid,
+        author: user.displayName || user.email?.split('@')[0] || 'Anonymous',
+        parentId,
+        createdAt: serverTimestamp()
+      })
+      setReplyText('')
+      setReplyingToId(null)
+    } catch (error) {
+      console.error('Error adding reply:', error)
+    }
+  }
+
+  const handleStartReply = (commentId) => {
+    if (!user) {
+      openAuthModal()
+      return
+    }
+
+    setReplyingToId(prev => prev === commentId ? null : commentId)
+    setReplyText('')
+  }
+
+  const handleCancelReply = () => {
+    setReplyingToId(null)
+    setReplyText('')
+  }
+
+  const handleCommentRating = async (commentId, rating) => {
+    if (!user) {
+      openAuthModal()
+      return
+    }
+
+    try {
+      await setDoc(doc(db, 'posts', postId, 'comments', commentId, 'ratings', user.uid), {
+        rating,
+        userId: user.uid,
+        createdAt: serverTimestamp()
+      })
+    } catch (error) {
+      console.error('Error rating comment:', error)
+    }
+  }
+
   const handleDeleteComment = async (commentId) => {
-    if (!window.confirm('Delete this comment?')) return
+    if (!window.confirm('Delete this sub-crux?')) return
 
     try {
       await deleteDoc(doc(db, 'posts', postId, 'comments', commentId))
     } catch (error) {
-      console.error('Error deleting comment:', error)
+      console.error('Error deleting sub-crux:', error)
     }
   }
 
+  const startEditingPost = () => {
+    setIsEditingPost(true)
+    setEditPostTitle(post.title || '')
+    setEditPostContent(post.content || '')
+    setEditPostTags(post.tags ? post.tags.join(', ') : '')
+  }
+
+  const cancelEditingPost = () => {
+    setIsEditingPost(false)
+    setEditPostTitle('')
+    setEditPostContent('')
+    setEditPostTags('')
+  }
+
+  const handleSavePost = async () => {
+    if (!editPostContent.trim() || editPostContent.length > 2048 || editPostTitle.length > 144) return
+
+    try {
+      const tagArray = editPostTags
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(tag => tag.length > 0)
+
+      await setDoc(doc(db, 'posts', postId), {
+        title: editPostTitle.trim(),
+        content: editPostContent.trim(),
+        tags: tagArray,
+        updatedAt: serverTimestamp()
+      }, { merge: true })
+
+      setIsEditingPost(false)
+    } catch (error) {
+      console.error('Error updating post:', error)
+      alert('Error updating crux. Please try again.')
+    }
+  }
+
+  const startEditingComment = (comment) => {
+    setEditingCommentId(comment.id)
+    setEditCommentText(comment.content)
+  }
+
+  const cancelEditingComment = () => {
+    setEditingCommentId(null)
+    setEditCommentText('')
+  }
+
+  const handleSaveComment = async (commentId) => {
+    if (!editCommentText.trim() || editCommentText.length > 2048) return
+
+    try {
+      // Use updateDoc to only modify specific fields
+      await updateDoc(doc(db, 'posts', postId, 'comments', commentId), {
+        content: editCommentText.trim(),
+        updatedAt: serverTimestamp()
+      })
+
+      setEditingCommentId(null)
+      setEditCommentText('')
+    } catch (error) {
+      console.error('Error updating sub-crux:', error)
+      console.error('Full error details:', error)
+      alert(`Error updating sub-crux: ${error.message}`)
+    }
+  }
 
   const handleGoogleSignIn = async () => {
     try {
@@ -222,6 +398,58 @@ function PostDetail() {
     return `${Math.floor(seconds / 86400)}d`
   }
 
+  // Helper function to build threaded comment tree
+  const buildCommentTree = (comments) => {
+    const commentMap = new Map()
+    const roots = []
+
+    // First pass: create map of all comments
+    comments.forEach(comment => {
+      commentMap.set(comment.id, { ...comment, children: [] })
+    })
+
+    // Second pass: build tree structure
+    comments.forEach(comment => {
+      const commentNode = commentMap.get(comment.id)
+      if (!comment.parentId) {
+        roots.push(commentNode)
+      } else {
+        const parent = commentMap.get(comment.parentId)
+        if (parent) {
+          parent.children.push(commentNode)
+        } else {
+          // Parent doesn't exist, treat as root
+          roots.push(commentNode)
+        }
+      }
+    })
+
+    // Sort roots and their children recursively
+    const sortComments = (commentsList = []) => {
+      return commentsList.sort((a, b) => {
+        if (commentSortBy === 'rating') {
+          const ratingA = a.avgRating ?? -1
+          const ratingB = b.avgRating ?? -1
+          if (ratingB !== ratingA) return ratingB - ratingA
+          return b.time - a.time
+        } else {
+          return b.time - a.time
+        }
+      }).map(comment => {
+        const sortedChildren = sortComments(comment.children)
+        return {
+          ...comment,
+          replyCount: sortedChildren.length,
+          children: sortedChildren
+        }
+      })
+    }
+
+    return sortComments(roots)
+  }
+
+  const threadedComments = buildCommentTree(comments)
+
   if (postLoading) {
     return (
       <div className="app">
@@ -252,14 +480,25 @@ function PostDetail() {
         <header className="header">
           <div className="header-content">
             <h1 onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>CRUX</h1>
-            {user ? (
-              <div className="user-info">
-                <span className="user-name">{user.displayName || user.email}</span>
-                <button onClick={handleLogout} className="logout-btn">LOGOUT</button>
-              </div>
-            ) : (
-              <button onClick={openAuthModal} className="signin-btn">SIGN IN</button>
-            )}
+            <div className="header-nav">
+              <button onClick={toggleTheme} className="theme-toggle" title={theme === 'clean' ? 'Switch to Starry theme' : 'Switch to Clean theme'}>
+                {theme === 'clean' ? '✦' : '●'}
+              </button>
+              {user ? (
+                <div className="user-info">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/', { state: { openDrafts: true } })}
+                    className="user-name-btn"
+                  >
+                    {user.displayName || user.email}
+                  </button>
+                  <button type="button" onClick={handleLogout} className="logout-btn">LOGOUT</button>
+                </div>
+              ) : (
+                <button onClick={openAuthModal} className="signin-btn">SIGN IN</button>
+              )}
+            </div>
           </div>
         </header>
 
@@ -272,27 +511,91 @@ function PostDetail() {
             <div className="avatar">A</div>
             <div className="post-content">
               <div className="post-header">
-                <span className="author">{post.author || 'Anonymous'}</span>
+                <span
+                  className="author author-link"
+                  onClick={() => {
+                    if (post.authorId) {
+                      navigate(`/user/${post.authorId}`)
+                    }
+                  }}
+                >
+                  {post.author || 'Anonymous'}
+                </span>
                 <span className="time">· {timeAgo(post.time)}</span>
-                {user && user.uid === post.authorId && (
-                  <button
-                    onClick={handleDeletePost}
-                    className="delete-btn"
-                    title="Delete this crux"
-                  >
-                    ×
-                  </button>
+                {user && user.uid === post.authorId && !isEditingPost && (
+                  <>
+                    <button
+                      onClick={startEditingPost}
+                      className="edit-btn"
+                      title="Edit this crux"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={handleDeletePost}
+                      className="delete-btn"
+                      title="Delete this crux"
+                    >
+                      ×
+                    </button>
+                  </>
                 )}
               </div>
-              {post.title && <h2 className="post-title">{post.title}</h2>}
-              {post.tags && post.tags.length > 0 && (
-                <div className="tags">
-                  {post.tags.map((tag, i) => (
-                    <span key={i} className="tag">{tag}</span>
-                  ))}
+
+              {isEditingPost ? (
+                <div className="edit-post-form">
+                  <input
+                    type="text"
+                    value={editPostTitle}
+                    onChange={(e) => setEditPostTitle(e.target.value)}
+                    placeholder="TITLE (OPTIONAL)"
+                    maxLength={144}
+                    className="title-input"
+                  />
+                  <textarea
+                    value={editPostContent}
+                    onChange={(e) => setEditPostContent(e.target.value)}
+                    placeholder="CONTENT..."
+                    rows="8"
+                    maxLength={2048}
+                    className="edit-textarea"
+                  />
+                  <input
+                    type="text"
+                    value={editPostTags}
+                    onChange={(e) => setEditPostTags(e.target.value)}
+                    placeholder="TAGS (COMMA-SEPARATED)"
+                    className="tags-input"
+                  />
+                  <div className="edit-buttons">
+                    <button onClick={handleSavePost} className="save-btn">
+                      SAVE
+                    </button>
+                    <button onClick={cancelEditingPost} className="cancel-btn">
+                      CANCEL
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                <>
+                  {post.title && <h2 className="post-title">{post.title}</h2>}
+                  {post.tags && post.tags.length > 0 && (
+                    <div className="tags">
+                      {post.tags.map((tag, i) => (
+                        <span
+                          key={i}
+                          className="tag"
+                          onClick={() => navigate(`/tag/${encodeURIComponent(tag)}`)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p className="post-text">{post.content}</p>
+                </>
               )}
-              <p className="post-text">{post.content}</p>
 
               <div className="rating-section">
                 <div className="rating-header">
@@ -321,20 +624,39 @@ function PostDetail() {
                 </div>
               </div>
 
-              {/* Comments Section */}
+              {/* Sub-Cruxes Section */}
               <div className="comments-section">
                 <div className="comments-header">
                   <span className="comments-label">
-                    {comments.length} {comments.length === 1 ? 'COMMENT' : 'COMMENTS'}
+                    {comments.length} {comments.length === 1 ? 'SUB-CRUX' : 'SUB-CRUXES'}
                   </span>
+                  <div className="comments-controls">
+                    <span className="filter-label">SORT BY:</span>
+                    <div className="sort-buttons">
+                      <button
+                        type="button"
+                        className={`filter-btn ${commentSortBy === 'rating' ? 'active' : ''}`}
+                        onClick={() => setCommentSortBy('rating')}
+                      >
+                        RATING
+                      </button>
+                      <button
+                        type="button"
+                        className={`filter-btn ${commentSortBy === 'recency' ? 'active' : ''}`}
+                        onClick={() => setCommentSortBy('recency')}
+                      >
+                        RECENCY
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                {user && (
+                {user ? (
                   <form onSubmit={handleAddComment} className="comment-form">
                     <textarea
                       value={commentText}
                       onChange={(e) => setCommentText(e.target.value)}
-                      placeholder="ADD A COMMENT..."
+                      placeholder="ADD A SUB-CRUX..."
                       rows="3"
                       maxLength={2048}
                       className="comment-input"
@@ -344,39 +666,51 @@ function PostDetail() {
                         {2048 - commentText.length}
                       </span>
                       <button type="submit" disabled={!commentText.trim() || commentText.length > 2048}>
-                        ADD COMMENT
+                        ADD SUB-CRUX
                       </button>
                     </div>
                   </form>
-                )}
-
-                {!user && (
+                ) : (
                   <div className="comment-auth-notice">
-                    Sign in to add comments
+                    Sign in to add sub-cruxes
                   </div>
                 )}
 
                 <div className="comments-list">
-                  {comments.map(comment => (
-                    <div key={comment.id} className="comment">
-                      <div className="comment-header">
-                        <div>
-                          <span className="comment-author">{comment.author}</span>
-                          <span className="comment-time">· {timeAgo(comment.time)}</span>
-                        </div>
-                        {user && user.uid === comment.authorId && (
-                          <button
-                            onClick={() => handleDeleteComment(comment.id)}
-                            className="delete-comment-btn"
-                            title="Delete comment"
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                      <p className="comment-text">{comment.content}</p>
+                  {threadedComments.length === 0 ? (
+                    <div className="comment-empty">
+                      No sub-cruxes yet. Start the conversation.
                     </div>
-                  ))}
+                  ) : (
+                    threadedComments.map(comment => (
+                      <ThreadedComment
+                        key={comment.id}
+                        comment={comment}
+                        depth={0}
+                        user={user}
+                        timeAgo={timeAgo}
+                        onRate={handleCommentRating}
+                        onEdit={startEditingComment}
+                        onDelete={handleDeleteComment}
+                        onReply={handleStartReply}
+                        editingCommentId={editingCommentId}
+                        editCommentText={editCommentText}
+                        setEditCommentText={setEditCommentText}
+                        onSaveEdit={handleSaveComment}
+                        onCancelEdit={cancelEditingComment}
+                        replyingToId={replyingToId}
+                        replyText={replyText}
+                        setReplyText={setReplyText}
+                        onSubmitReply={handleSubmitReply}
+                        onCancelReply={handleCancelReply}
+                        onViewProfile={(profileUserId) => {
+                          if (profileUserId) {
+                            navigate(`/user/${profileUserId}`)
+                          }
+                        }}
+                      />
+                    ))
+                  )}
                 </div>
               </div>
             </div>

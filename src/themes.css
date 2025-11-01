@@ -1,0 +1,493 @@
+/* ============================================
+   THEME SYSTEM
+   ============================================ */
+
+/* Clean Theme - Default simple black/white */
+.theme-clean {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f8f8;
+  --text-primary: #000000;
+  --text-secondary: #666666;
+  --border-color: #e0e0e0;
+  --accent-primary: #000000;
+  --accent-secondary: #333333;
+}
+
+.theme-clean .app {
+  background: var(--bg-primary);
+}
+
+.theme-clean .container {
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+}
+
+.theme-clean .header {
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.theme-clean h1 {
+  color: var(--text-primary) !important;
+  text-shadow: none !important;
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+  background-clip: unset !important;
+  animation: none !important;
+}
+
+.theme-clean .compose {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.theme-clean .avatar {
+  background: var(--text-primary);
+  box-shadow: none;
+  color: var(--bg-primary);
+}
+
+.theme-clean .post {
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.theme-clean .post-title {
+  color: var(--text-primary);
+}
+
+.theme-clean .post-text,
+.theme-clean .author,
+.theme-clean .comment-text {
+  color: var(--text-primary);
+}
+
+.theme-clean .time,
+.theme-clean .comment-time {
+  color: var(--text-secondary);
+}
+
+.theme-clean textarea,
+.theme-clean input[type="text"],
+.theme-clean input[type="email"],
+.theme-clean input[type="password"] {
+  color: var(--text-primary);
+  border-color: var(--border-color);
+  background: var(--bg-primary);
+}
+
+.theme-clean textarea::placeholder,
+.theme-clean input::placeholder {
+  color: var(--text-secondary);
+}
+
+.theme-clean button {
+  color: var(--text-primary);
+  border-color: var(--border-color);
+  background: var(--bg-primary);
+}
+
+.theme-clean button:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.theme-clean .rating-btn {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .rating-btn:hover:not(:disabled) {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.theme-clean .rating-btn.selected {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .rating-btn.zero,
+.theme-clean .rating-btn.eleven {
+  opacity: 0.5;
+}
+
+.theme-clean .tag {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.theme-clean .tag:hover {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+}
+
+.theme-clean .tag-active {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border-color: var(--text-primary);
+}
+
+.theme-clean .modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.theme-clean .modal-overlay {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.theme-clean .action-relevance-hint {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-left-color: var(--border-color);
+}
+
+.theme-clean .title-input {
+  border-bottom-color: var(--border-color);
+}
+
+.theme-clean .title-input:focus {
+  border-bottom-color: var(--text-primary);
+}
+
+.theme-clean .tags-input {
+  border-bottom-color: var(--border-color);
+}
+
+.theme-clean .tags-input:focus {
+  border-bottom-color: var(--text-primary);
+}
+
+.theme-clean .comment {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.theme-clean .comment:hover {
+  background: var(--bg-secondary);
+  border-color: var(--text-primary);
+}
+
+.theme-clean .comments-section {
+  border-top: 1px solid var(--border-color);
+}
+
+.theme-clean .filter-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.theme-clean .filter-btn.active {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+}
+
+/* Remove neon effects and colors in clean theme */
+.theme-clean .avatar,
+.theme-clean button,
+.theme-clean .rating-btn,
+.theme-clean h1,
+.theme-clean .tag {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+/* Override all cyan/magenta accent colors in clean theme */
+.theme-clean * {
+  /* Remove any cyan text */
+}
+
+.theme-clean .title-input,
+.theme-clean .tags-input,
+.theme-clean textarea,
+.theme-clean input {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .title-input:focus,
+.theme-clean .tags-input:focus,
+.theme-clean textarea:focus,
+.theme-clean input:focus {
+  border-color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .count,
+.theme-clean .count-over {
+  color: var(--text-secondary) !important;
+}
+
+.theme-clean .author,
+.theme-clean .user-name,
+.theme-clean .comment-author {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .author-link {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .author-link:hover {
+  color: var(--text-primary) !important;
+  opacity: 0.7;
+}
+
+.theme-clean .time,
+.theme-clean .comment-time {
+  color: var(--text-secondary) !important;
+}
+
+.theme-clean .post-title {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .post-text,
+.theme-clean .comment-text {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .comment-rating,
+.theme-clean .avg-rating,
+.theme-clean .rating-label,
+.theme-clean .rating-legend,
+.theme-clean .legend-item {
+  color: var(--text-secondary) !important;
+}
+
+.theme-clean .comment-empty {
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.theme-clean .rating-btn-small {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.theme-clean .rating-btn-small:hover {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .rating-btn-small.selected {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .reply-btn,
+.theme-clean .collapse-btn,
+.theme-clean .reply-submit-btn {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.theme-clean .reply-btn:hover,
+.theme-clean .collapse-btn:hover,
+.theme-clean .reply-submit-btn:hover:not(:disabled) {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .reply-submit-btn:disabled {
+  opacity: 0.5;
+}
+
+.theme-clean .comment-children {
+  border-left: 1px solid var(--border-color);
+  background: none;
+}
+
+.theme-clean .reply-form {
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.theme-clean .comments-label,
+.theme-clean .filter-label {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .profile-header {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.theme-clean .profile-avatar {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.theme-clean .profile-name {
+  background: none;
+  -webkit-text-fill-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+.theme-clean .profile-meta {
+  color: var(--text-secondary);
+}
+
+.theme-clean .profile-loading,
+.theme-clean .profile-empty,
+.theme-clean .profile-missing {
+  color: var(--text-secondary);
+}
+
+.theme-clean .profile-sort-bar {
+  border-top: 1px solid var(--border-color);
+}
+
+.theme-clean .save-draft-btn {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .save-draft-btn:hover:not(:disabled) {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+}
+
+.theme-clean .draft-status {
+  color: var(--text-secondary) !important;
+}
+
+.theme-clean .user-name-btn {
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .user-name-btn:hover {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .drafts-modal {
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.theme-clean .draft-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.theme-clean .draft-item.current {
+  border-color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.theme-clean .draft-title-text,
+.theme-clean .draft-snippet,
+.theme-clean .draft-meta,
+.theme-clean .no-drafts {
+  color: var(--text-secondary) !important;
+}
+
+.theme-clean .load-draft-btn,
+.theme-clean .delete-draft-btn {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.theme-clean .load-draft-btn:hover,
+.theme-clean .delete-draft-btn:hover {
+  background: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
+  border-color: var(--text-primary) !important;
+}
+
+/* Buttons and links */
+.theme-clean .nav-link,
+.theme-clean .back-btn,
+.theme-clean .signin-btn,
+.theme-clean .logout-btn {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.theme-clean .nav-link:hover,
+.theme-clean .back-btn:hover {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--text-primary) !important;
+}
+
+/* Tag styles */
+.theme-clean .tag-card-name,
+.theme-clean .tag-stat-value,
+.theme-clean .tag-stat-label {
+  color: var(--text-primary) !important;
+}
+
+.theme-clean .stat-number,
+.theme-clean .stat-label {
+  color: var(--text-primary) !important;
+}
+
+/* Starry Theme - Cyberpunk neon */
+.theme-starry {
+  --bg-primary: #000000;
+  --text-primary: #ffffff;
+}
+
+.theme-starry .app {
+  background: #000;
+}
+
+/* Keep all existing starry theme styles as-is */
+/* The existing CSS already has the starry theme as default */
+
+/* Theme toggle button */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.3));
+  color: var(--text-primary, #fff);
+  padding: 6px 12px;
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: 'Space Mono', monospace;
+  letter-spacing: 1px;
+  margin-right: 12px;
+  transition: all 0.3s;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.1));
+}
+
+.theme-starry .theme-toggle {
+  border-color: rgba(0, 255, 255, 0.3);
+}
+
+.theme-starry .theme-toggle:hover {
+  background: rgba(0, 255, 255, 0.1);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+}

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, getDoc, getDocs, deleteDoc } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, logout } from './firebase'
@@ -35,6 +35,8 @@ const examplePosts = [
 
 function App() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const savingDraftRef = useRef(false)
   const [posts, setPosts] = useState([])
   const [title, setTitle] = useState('')
   const [text, setText] = useState('')
@@ -46,15 +48,412 @@ function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
+  const [nextPostTime, setNextPostTime] = useState(null)
+  const [timeUntilPost, setTimeUntilPost] = useState('')
+  const [sortBy, setSortBy] = useState('recency') // 'recency', 'rating', or 'mostRated'
+  const [theme, setTheme] = useState(() => {
+    // Load theme from localStorage or default to 'clean'
+    return localStorage.getItem('crux-theme') || 'clean'
+  })
+  const [drafts, setDrafts] = useState([])
+  const [showDraftsModal, setShowDraftsModal] = useState(false)
+  const [currentDraftId, setCurrentDraftId] = useState(null)
+  const [isDraftDirty, setIsDraftDirty] = useState(false)
+  const [draftStatus, setDraftStatus] = useState('')
+  const [savingDraft, setSavingDraft] = useState(false)
+
+  const hasDraftContent = useMemo(() => {
+    return title.trim().length > 0 || text.trim().length > 0 || tags.trim().length > 0
+  }, [title, text, tags])
+  const canSaveDraft = user && hasDraftContent
+
+  const localDraftKey = useMemo(() => user ? `crux-drafts-${user.uid}` : 'crux-drafts-guest', [user])
+
+  const sortDraftList = useCallback((list) => {
+    return [...list].sort((a, b) => {
+      const toTime = (value) => {
+        if (value instanceof Date) return value.getTime()
+        if (value && typeof value.toDate === 'function') return value.toDate().getTime()
+        if (typeof value === 'string') {
+          const parsed = Date.parse(value)
+          return Number.isNaN(parsed) ? 0 : parsed
+        }
+        return 0
+      }
+      return toTime(b.updatedAt) - toTime(a.updatedAt)
+    })
+  }, [])
+
+  const loadDraftsFromLocal = useCallback(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem(localDraftKey)
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return []
+      return parsed.map(draft => ({
+        ...draft,
+        tags: Array.isArray(draft.tags) ? draft.tags : [],
+        updatedAt: draft.updatedAt ? new Date(draft.updatedAt) : null,
+        createdAt: draft.createdAt ? new Date(draft.createdAt) : null
+      }))
+    } catch (error) {
+      console.error('Error loading drafts from localStorage:', error)
+      return []
+    }
+  }, [localDraftKey])
+
+  const persistDraftsToLocal = useCallback((draftList) => {
+    if (typeof window === 'undefined') return
+    try {
+      const serializable = draftList.map(draft => ({
+        ...draft,
+        tags: Array.isArray(draft.tags) ? draft.tags : [],
+        updatedAt: draft.updatedAt instanceof Date ? draft.updatedAt.toISOString() : draft.updatedAt,
+        createdAt: draft.createdAt instanceof Date ? draft.createdAt.toISOString() : draft.createdAt
+      }))
+      localStorage.setItem(localDraftKey, JSON.stringify(serializable))
+    } catch (error) {
+      console.error('Error saving drafts to localStorage:', error)
+    }
+  }, [localDraftKey])
+
+  const updateDrafts = useCallback((updater) => {
+    setDrafts(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      const normalized = Array.isArray(next) ? next : []
+      persistDraftsToLocal(normalized)
+      return normalized
+    })
+  }, [persistDraftsToLocal])
+
+  useEffect(() => {
+    const localDrafts = loadDraftsFromLocal()
+    updateDrafts(() => sortDraftList(localDrafts))
+  }, [loadDraftsFromLocal, updateDrafts, sortDraftList])
+
+  const saveDraft = useCallback(async ({ auto = false, skipEmpty = false } = {}) => {
+    if (!hasDraftContent) {
+      if (!skipEmpty && !auto) {
+        setDraftStatus('Nothing to save')
+      }
+      return null
+    }
+
+    if (savingDraftRef.current) {
+      return currentDraftId
+    }
+
+    savingDraftRef.current = true
+    setSavingDraft(true)
+
+    const tagArray = tags
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0)
+
+    const now = new Date()
+    let draftId = currentDraftId || null
+    let remoteFailed = false
+
+    if (user) {
+      try {
+        const draftsRef = collection(db, 'users', user.uid, 'drafts')
+        const draftDocRef = draftId ? doc(draftsRef, draftId) : doc(draftsRef)
+        draftId = draftDocRef.id
+        const remotePayload = {
+          title: title.trim(),
+          content: text.trim(),
+          tags: tagArray,
+          updatedAt: serverTimestamp()
+        }
+        if (!currentDraftId) {
+          remotePayload.createdAt = serverTimestamp()
+        }
+        await setDoc(draftDocRef, remotePayload, { merge: true })
+      } catch (error) {
+        remoteFailed = true
+        console.error('Error saving draft to Firestore:', error)
+      }
+    }
+
+    if (!draftId) {
+      draftId = `local-${Date.now()}`
+    }
+
+    let savedDraftId = draftId
+
+    try {
+      updateDrafts(prev => {
+        const existingIndex = prev.findIndex(draft => draft.id === draftId)
+        const existingDraft = existingIndex !== -1 ? prev[existingIndex] : null
+        const draftForState = {
+          id: draftId,
+          title: title.trim(),
+          content: text.trim(),
+          tags: tagArray,
+          updatedAt: now,
+          createdAt: existingDraft?.createdAt || now
+        }
+
+        if (existingIndex !== -1) {
+          const next = [...prev]
+          next[existingIndex] = draftForState
+          return sortDraftList(next)
+        }
+
+        return sortDraftList([draftForState, ...prev])
+      })
+
+      setCurrentDraftId(draftId)
+      setIsDraftDirty(false)
+
+      if (!auto) {
+        if (!user) {
+          setDraftStatus('Draft saved locally')
+        } else if (remoteFailed) {
+          setDraftStatus('Draft saved locally (sync pending)')
+        } else {
+          setDraftStatus('Draft saved')
+        }
+      }
+
+      savedDraftId = draftId
+    } finally {
+      savingDraftRef.current = false
+      setSavingDraft(false)
+    }
+
+    return savedDraftId
+  }, [hasDraftContent, currentDraftId, tags, title, text, user, updateDrafts, sortDraftList])
+
+  const ensureDraftSaved = useCallback(async () => {
+    if (user && isDraftDirty && hasDraftContent) {
+      await saveDraft({ auto: true, skipEmpty: true })
+    }
+  }, [user, isDraftDirty, hasDraftContent, saveDraft])
+
+  const navigateWithDraftSave = useCallback((path, options = {}) => {
+    const handleNavigation = () => {
+      if (location.pathname === path) {
+        if (path === '/') {
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }
+      } else {
+        navigate(path, options)
+      }
+    }
+
+    if (isDraftDirty && hasDraftContent) {
+      saveDraft({ auto: true, skipEmpty: true }).finally(handleNavigation)
+    } else {
+      handleNavigation()
+    }
+  }, [location.pathname, isDraftDirty, hasDraftContent, saveDraft, navigate])
+
+  const handleSaveDraftClick = useCallback(async () => {
+    await saveDraft()
+  }, [saveDraft])
+
+  const handleOpenDrafts = useCallback(async () => {
+    await saveDraft({ auto: true, skipEmpty: true })
+    setShowDraftsModal(true)
+  }, [saveDraft])
+
+  const handleCloseDrafts = () => {
+    setShowDraftsModal(false)
+  }
+
+  const handleLoadDraft = (draft) => {
+    setTitle(draft.title || '')
+    setText(draft.content || '')
+    setTags(
+      draft.tags && Array.isArray(draft.tags)
+        ? draft.tags.join(', ')
+        : (draft.tags || '')
+    )
+    setCurrentDraftId(draft.id)
+    setIsDraftDirty(false)
+    setShowDraftsModal(false)
+    setDraftStatus('Draft loaded')
+  }
+
+  const handleDeleteDraft = async (draftId) => {
+    if (!draftId) return
+
+    let remoteFailed = false
+    if (user) {
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'drafts', draftId))
+      } catch (error) {
+        remoteFailed = true
+        console.error('Error deleting draft from Firestore:', error)
+      }
+    }
+
+    updateDrafts(prev => prev.filter(draft => draft.id !== draftId))
+
+    if (draftId === currentDraftId) {
+      setCurrentDraftId(null)
+    }
+
+    setDraftStatus(remoteFailed ? 'Draft removed locally (sync pending)' : 'Draft deleted')
+  }
+
+  const handleHeadingClick = () => {
+    navigateWithDraftSave('/')
+  }
+
+  const handleTagsClick = () => {
+    navigateWithDraftSave('/tags')
+  }
+
+  const handleOpenPost = (postId) => {
+    navigateWithDraftSave(`/post/${postId}`)
+  }
+
+  const handleTagClick = (event, tag) => {
+    event.stopPropagation()
+    navigateWithDraftSave(`/tag/${encodeURIComponent(tag)}`)
+  }
 
   // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser)
       setLoading(false)
+
+      if (currentUser) {
+        const syncProfile = async () => {
+          try {
+            const userRef = doc(db, 'users', currentUser.uid)
+            const snapshot = await getDoc(userRef)
+            const baseProfile = {
+              displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Anonymous',
+              displayNameLower: (currentUser.displayName || currentUser.email || 'anonymous').toLowerCase(),
+              email: currentUser.email || null,
+              photoURL: currentUser.photoURL || null,
+              updatedAt: serverTimestamp()
+            }
+
+            if (snapshot.exists()) {
+              await setDoc(userRef, baseProfile, { merge: true })
+            } else {
+              await setDoc(userRef, { ...baseProfile, createdAt: serverTimestamp() }, { merge: true })
+            }
+          } catch (error) {
+            console.error('Error syncing user profile:', error)
+          }
+        }
+        syncProfile()
+      }
     })
     return () => unsubscribe()
   }, [])
+
+  // Drafts listener
+  useEffect(() => {
+    if (!user) {
+      const localDrafts = loadDraftsFromLocal()
+      updateDrafts(() => sortDraftList(localDrafts))
+      setCurrentDraftId(null)
+      return
+    }
+
+    const draftsRef = collection(db, 'users', user.uid, 'drafts')
+    const draftsQuery = query(draftsRef, orderBy('updatedAt', 'desc'))
+
+    const unsubscribe = onSnapshot(draftsQuery, (snapshot) => {
+      const draftsData = snapshot.docs.map(docSnap => {
+        const data = docSnap.data()
+        return {
+          id: docSnap.id,
+          ...data,
+          tags: Array.isArray(data.tags) ? data.tags : [],
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : null,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null
+        }
+      })
+      const localDrafts = loadDraftsFromLocal()
+      const remoteIds = new Set(draftsData.map(draft => draft.id))
+      const mergedDrafts = [...draftsData, ...localDrafts.filter(draft => !remoteIds.has(draft.id))]
+      updateDrafts(() => sortDraftList(mergedDrafts))
+    }, (error) => {
+      console.error('Error loading drafts:', error)
+      const localDrafts = loadDraftsFromLocal()
+      updateDrafts(() => sortDraftList(localDrafts))
+    })
+
+    return () => unsubscribe()
+  }, [user, loadDraftsFromLocal, updateDrafts, sortDraftList])
+
+  useEffect(() => {
+    if (location.state?.openDrafts && user) {
+      saveDraft({ auto: true, skipEmpty: true }).finally(() => setShowDraftsModal(true))
+      navigate(location.pathname, { replace: true, state: {} })
+    }
+  }, [location, user, navigate, saveDraft])
+
+  useEffect(() => {
+    if (!draftStatus) return
+    const timeout = setTimeout(() => setDraftStatus(''), 3000)
+    return () => clearTimeout(timeout)
+  }, [draftStatus])
+
+  // Check when user can post next
+  useEffect(() => {
+    if (!user) {
+      setNextPostTime(null)
+      setTimeUntilPost('')
+      return
+    }
+
+    const checkLastPost = async () => {
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid))
+        if (userDoc.exists() && userDoc.data().lastPostAt) {
+          const lastPost = userDoc.data().lastPostAt.toDate()
+          const nextPost = new Date(lastPost.getTime() + 24 * 60 * 60 * 1000)
+          setNextPostTime(nextPost)
+        } else {
+          setNextPostTime(null)
+        }
+      } catch (error) {
+        console.error('Error checking last post:', error)
+      }
+    }
+
+    checkLastPost()
+  }, [user])
+
+  // Update time until next post every second
+  useEffect(() => {
+    if (!nextPostTime) {
+      setTimeUntilPost('')
+      return
+    }
+
+    const updateTimer = () => {
+      const now = new Date()
+      const diff = nextPostTime - now
+
+      if (diff <= 0) {
+        setTimeUntilPost('')
+        setNextPostTime(null)
+        return
+      }
+
+      const hours = Math.floor(diff / (1000 * 60 * 60))
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000)
+
+      setTimeUntilPost(`${hours}h ${minutes}m ${seconds}s`)
+    }
+
+    updateTimer()
+    const interval = setInterval(updateTimer, 1000)
+    return () => clearInterval(interval)
+  }, [nextPostTime])
 
   // Firestore listener for posts
   useEffect(() => {
@@ -109,13 +508,26 @@ function App() {
     e.preventDefault()
     if (!text.trim() || text.length > 2048 || title.length > 144 || !user) return
 
+    // Check if user can post (24 hour limit)
+    if (nextPostTime && new Date() < nextPostTime) {
+      alert(`You can post again in ${timeUntilPost}`)
+      return
+    }
+
     try {
+      const now = new Date()
+
+      // Set next post time BEFORE creating the post to prevent double-posting
+      const nextAllowedPost = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+      setNextPostTime(nextAllowedPost)
+
       // Parse tags: comma-separated, trim whitespace, filter empty
       const tagArray = tags
         .split(',')
         .map(tag => tag.trim())
         .filter(tag => tag.length > 0)
 
+      // Create the post
       await addDoc(collection(db, 'posts'), {
         title: title.trim(),
         content: text.trim(),
@@ -124,11 +536,33 @@ function App() {
         author: user.displayName || user.email?.split('@')[0] || 'Anonymous',
         createdAt: serverTimestamp()
       })
+
+      // Update user's last post timestamp
+      await setDoc(doc(db, 'users', user.uid), {
+        lastPostAt: serverTimestamp()
+      }, { merge: true })
+
+      if (currentDraftId) {
+        try {
+          await deleteDoc(doc(db, 'users', user.uid, 'drafts', currentDraftId))
+        } catch (deleteError) {
+          console.error('Error deleting draft after posting:', deleteError)
+        }
+      }
+
       setTitle('')
       setText('')
       setTags('')
+      setCurrentDraftId(null)
+      setIsDraftDirty(false)
+      setDraftStatus('')
+
+      alert('Crux posted successfully! You can post again in 24 hours.')
     } catch (error) {
       console.error('Error posting:', error)
+      alert('Error posting crux. Please try again.')
+      // Reset nextPostTime if posting failed
+      setNextPostTime(null)
     }
   }
 
@@ -180,6 +614,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
+      await ensureDraftSaved()
       await logout()
     } catch (error) {
       console.error('Logout error:', error)
@@ -214,8 +649,24 @@ function App() {
   const remainingTitle = 144 - title.length
   const remainingContent = 2048 - text.length
 
-  // Scroll fade effect
+  // Save theme to localStorage when it changes
   useEffect(() => {
+    localStorage.setItem('crux-theme', theme)
+    // Apply theme class to body
+    document.body.className = theme === 'starry' ? 'theme-starry' : 'theme-clean'
+  }, [theme])
+
+  // Scroll fade effect (only in starry mode)
+  useEffect(() => {
+    if (theme !== 'starry') {
+      // Reset all post opacities to 1 in clean mode
+      const posts = document.querySelectorAll('.post')
+      posts.forEach(post => {
+        post.style.opacity = 1
+      })
+      return
+    }
+
     const handleScroll = () => {
       const posts = document.querySelectorAll('.post')
       const windowHeight = window.innerHeight
@@ -257,22 +708,36 @@ function App() {
     })
 
     return () => window.removeEventListener('scroll', handleScroll)
-  }, [posts])
+  }, [posts, theme])
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'clean' ? 'starry' : 'clean')
+  }
 
   return (
     <div className="app">
       <div className="container">
         <header className="header">
           <div className="header-content">
-            <h1>CRUX</h1>
-            {user ? (
-              <div className="user-info">
-                <span className="user-name">{user.displayName || user.email}</span>
-                <button onClick={handleLogout} className="logout-btn">LOGOUT</button>
-              </div>
-            ) : (
-              <button onClick={openAuthModal} className="signin-btn">SIGN IN</button>
-            )}
+            <h1 onClick={handleHeadingClick} style={{ cursor: 'pointer' }}>CRUX</h1>
+            <div className="header-nav">
+              <button onClick={toggleTheme} className="theme-toggle" title={theme === 'clean' ? 'Switch to Starry theme' : 'Switch to Clean theme'}>
+                {theme === 'clean' ? '✦' : '●'}
+              </button>
+              <button onClick={handleTagsClick} className="nav-link">
+                TAGS
+              </button>
+              {user ? (
+                <div className="user-info">
+                  <button type="button" onClick={handleOpenDrafts} className="user-name-btn">
+                    {user.displayName || user.email}
+                  </button>
+                  <button type="button" onClick={handleLogout} className="logout-btn">LOGOUT</button>
+                </div>
+              ) : (
+                <button onClick={openAuthModal} className="signin-btn">SIGN IN</button>
+              )}
+            </div>
           </div>
         </header>
 
@@ -282,46 +747,138 @@ function App() {
             <input
               type="text"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value)
+                setIsDraftDirty(true)
+              }}
               placeholder="TITLE (OPTIONAL)"
               maxLength={144}
               className="title-input"
+              disabled={nextPostTime && new Date() < nextPostTime}
             />
             <div className="title-count">
               <span className={remainingTitle < 0 ? 'count-over' : 'count'}>{remainingTitle}</span>
             </div>
             <textarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value)
+                setIsDraftDirty(true)
+              }}
               placeholder="TRANSMIT YOUR MISSION-CRITICAL INSIGHT..."
               rows="5"
+              disabled={nextPostTime && new Date() < nextPostTime}
             />
+            <div className="action-relevance-hint">
+              Consider: Strategic intelligence · Ease of implementation · Opportunity cost · Leverage · Scalability · Novelty · Robustness
+            </div>
             <input
               type="text"
               value={tags}
-              onChange={(e) => setTags(e.target.value)}
+              onChange={(e) => {
+                setTags(e.target.value)
+                setIsDraftDirty(true)
+              }}
               placeholder="TAGS (COMMA-SEPARATED, E.G. AI SAFETY, LONGTERMISM, EXISTENTIAL RISK)"
               className="tags-input"
+              disabled={nextPostTime && new Date() < nextPostTime}
             />
             <div className="compose-footer">
               <span className={remainingContent < 0 ? 'count-over' : 'count'}>{remainingContent}</span>
-              <button type="submit" disabled={!text.trim() || remainingContent < 0 || remainingTitle < 0 || !user}>
-                {user ? 'POST' : 'SIGN IN TO POST'}
-              </button>
+              <div className="compose-buttons">
+                <button
+                  type="button"
+                  className="save-draft-btn"
+                  onClick={handleSaveDraftClick}
+                  disabled={!canSaveDraft || savingDraft || (!isDraftDirty && currentDraftId)}
+                >
+                  {savingDraft
+                    ? 'SAVING...'
+                    : (!isDraftDirty && currentDraftId ? 'DRAFT SAVED' : 'SAVE DRAFT')}
+                </button>
+                <button type="submit" disabled={!text.trim() || remainingContent < 0 || remainingTitle < 0 || !user || (nextPostTime && new Date() < nextPostTime)}>
+                  {!user ? 'SIGN IN TO POST' : (nextPostTime && new Date() < nextPostTime) ? `NEXT POST IN ${timeUntilPost}` : 'POST'}
+                </button>
+              </div>
             </div>
+            {draftStatus && <div className="draft-status">{draftStatus}</div>}
             {!user && (
               <div className="auth-notice">Sign in to transmit your crux</div>
+            )}
+            {user && nextPostTime && new Date() < nextPostTime && (
+              <div className="rate-limit-notice">
+                One crux per day. Next post available in {timeUntilPost}
+              </div>
             )}
           </form>
         </div>
 
+        <div className="filter-sort-bar">
+          <div className="filter-section">
+            <span className="filter-label">SORT BY:</span>
+            <div className="sort-buttons">
+              <button
+                className={`filter-btn ${sortBy === 'recency' ? 'active' : ''}`}
+                onClick={() => setSortBy('recency')}
+              >
+                NEWEST
+              </button>
+              <button
+                className={`filter-btn ${sortBy === 'rating' ? 'active' : ''}`}
+                onClick={() => setSortBy('rating')}
+              >
+                TOP RATED
+              </button>
+              <button
+                className={`filter-btn ${sortBy === 'mostRated' ? 'active' : ''}`}
+                onClick={() => setSortBy('mostRated')}
+              >
+                MOST RATED
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div className="feed">
-          {posts.map(post => (
-            <div key={post.id} className="post" onClick={() => navigate(`/post/${post.id}`)} style={{ cursor: 'pointer' }}>
+          {posts
+            .sort((a, b) => {
+              if (sortBy === 'rating') {
+                // Sort by rating (highest first), then by recency as tiebreaker
+                const ratingA = a.avgRating ?? -1
+                const ratingB = b.avgRating ?? -1
+                if (ratingB !== ratingA) {
+                  return ratingB - ratingA
+                }
+                return b.time - a.time
+              } else if (sortBy === 'mostRated') {
+                // Sort by rating count (most ratings first), then by recency as tiebreaker
+                const countA = a.ratingCount ?? 0
+                const countB = b.ratingCount ?? 0
+                if (countB !== countA) {
+                  return countB - countA
+                }
+                return b.time - a.time
+              } else {
+                // Sort by recency (newest first)
+                return b.time - a.time
+              }
+            })
+            .map(post => (
+            <div key={post.id} className="post" onClick={() => handleOpenPost(post.id)} style={{ cursor: 'pointer' }}>
               <div className="avatar">A</div>
               <div className="post-content">
                 <div className="post-header">
-                  <span className="author">{post.author || 'Anonymous'}</span>
+                  <span
+                    className="author author-link"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (post.authorId) {
+                        navigateWithDraftSave(`/user/${post.authorId}`)
+                      }
+                    }}
+                  >
+                    {post.author || 'Anonymous'}
+                  </span>
                   <span className="time">· {timeAgo(post.time)}</span>
                   {user && user.uid === post.authorId && (
                     <button
@@ -340,7 +897,14 @@ function App() {
                 {post.tags && post.tags.length > 0 && (
                   <div className="tags">
                     {post.tags.map((tag, i) => (
-                      <span key={i} className="tag">{tag}</span>
+                      <span
+                        key={i}
+                        className="tag"
+                        onClick={(e) => handleTagClick(e, tag)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {tag}
+                      </span>
                     ))}
                   </div>
                 )}
@@ -379,6 +943,45 @@ function App() {
             </div>
           ))}
         </div>
+
+        {showDraftsModal && (
+          <div className="modal-overlay" onClick={handleCloseDrafts}>
+            <div className="modal drafts-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="drafts-header">
+                <h2 className="drafts-title">DRAFTS</h2>
+                <button type="button" className="modal-close" onClick={handleCloseDrafts}>×</button>
+              </div>
+              <div className="drafts-list">
+                {drafts.length === 0 ? (
+                  <div className="no-drafts">No drafts yet</div>
+                ) : (
+                  drafts.map(draft => (
+                    <div key={draft.id} className={`draft-item${draft.id === currentDraftId ? ' current' : ''}`}>
+                      <div className="draft-info">
+                        <div className="draft-title-text">{draft.title || 'Untitled Draft'}</div>
+                        <div className="draft-meta">
+                          {draft.updatedAt
+                            ? `Updated ${timeAgo(draft.updatedAt)}`
+                            : 'Saving...'}
+                          {draft.tags && draft.tags.length > 0 ? ` · ${draft.tags.join(', ')}` : ''}
+                        </div>
+                        {draft.content && (
+                          <div className="draft-snippet">
+                            {draft.content.length > 160 ? `${draft.content.slice(0, 157)}…` : draft.content}
+                          </div>
+                        )}
+                      </div>
+                      <div className="draft-actions">
+                        <button type="button" className="load-draft-btn" onClick={() => handleLoadDraft(draft)}>LOAD</button>
+                        <button type="button" className="delete-draft-btn" onClick={() => handleDeleteDraft(draft.id)}>DELETE</button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {showAuthModal && (
           <div className="modal-overlay" onClick={() => setShowAuthModal(false)}>
